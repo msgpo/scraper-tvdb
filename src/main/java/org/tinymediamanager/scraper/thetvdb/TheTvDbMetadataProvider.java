@@ -29,7 +29,9 @@ import java.util.Calendar;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -49,6 +51,7 @@ import org.tinymediamanager.scraper.entities.MediaCastMember;
 import org.tinymediamanager.scraper.entities.MediaCastMember.CastType;
 import org.tinymediamanager.scraper.entities.MediaEpisode;
 import org.tinymediamanager.scraper.entities.MediaGenres;
+import org.tinymediamanager.scraper.entities.MediaLanguages;
 import org.tinymediamanager.scraper.entities.MediaType;
 import org.tinymediamanager.scraper.http.TmmHttpClient;
 import org.tinymediamanager.scraper.mediaprovider.ITvShowArtworkProvider;
@@ -99,6 +102,14 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
         "<html><h3>The TV DB</h3><br />An open database for television fans. This scraper is able to scrape TV series metadata and artwork",
         TheTvDbMetadataProvider.class.getResource("/thetvdb_com.png"));
     providerInfo.setVersion(TheTvDbMetadataProvider.class);
+
+    ArrayList<String> fallbackLanguages = new ArrayList<>();
+    for (MediaLanguages mediaLanguages : MediaLanguages.values()) {
+      fallbackLanguages.add(mediaLanguages.toString());
+    }
+    providerInfo.getConfig().addSelect("fallbackLanguage", fallbackLanguages.toArray(new String[0]), MediaLanguages.en.toString());
+    providerInfo.getConfig().load();
+
     return providerInfo;
   }
 
@@ -112,7 +123,7 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
           @Override
           protected synchronized OkHttpClient okHttpClient() {
             if (this.okHttpClient == null) {
-              OkHttpClient.Builder builder = TmmHttpClient.newBuilder(true);
+              OkHttpClient.Builder builder = TmmHttpClient.newBuilder();
               this.setOkHttpClientDefaults(builder);
               this.okHttpClient = builder.build();
             }
@@ -172,11 +183,13 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
     }
 
     String language = options.getLanguage().getLanguage();
+    String fallbackLanguage = MediaLanguages.get(providerInfo.getConfig().getValue("fallbackLanguage")).getLanguage();
     String country = options.getCountry().name(); // for passing the country to the scrape
 
-    // search via the api
+    // search via the api; 2 times if the language of the options and fallback language differ
     List<Series> series = new ArrayList<>();
     synchronized (tvdb) {
+      // first with the desired scraping language
       TheTvDbConnectionCounter.trackConnections();
       try {
         SeriesResultsResponse response = tvdb.search().series(searchString, null, null, language).execute().body();
@@ -185,6 +198,19 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
       catch (Exception e) {
         LOGGER.error("problem getting data vom tvdb: " + e.getMessage());
       }
+
+      // second with the fallback language
+      if (!fallbackLanguage.equals(language)) {
+        TheTvDbConnectionCounter.trackConnections();
+        try {
+          SeriesResultsResponse response = tvdb.search().series(searchString, null, null, fallbackLanguage).execute().body();
+          series.addAll(response.data);
+        }
+        catch (Exception e) {
+          LOGGER.error("problem getting data vom tvdb: " + e.getMessage());
+        }
+      }
+
       LOGGER.debug("found " + series.size() + " results with TMDB id");
     }
 
@@ -192,7 +218,16 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
       return results;
     }
 
+    // make sure there are no duplicates (e.g. if a show has been found in both languages)
+    Map<Integer, MediaSearchResult> resultMap = new HashMap<>();
+
     for (Series show : series) {
+      // check if that show has already a result
+      if (resultMap.containsKey(show.id)) {
+        continue;
+      }
+
+      // build up a new result
       MediaSearchResult result = new MediaSearchResult(providerInfo.getId(), options.getMediaType());
       result.setId(show.id.toString());
       result.setTitle(show.seriesName);
@@ -214,8 +249,12 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
       }
       result.setScore(score);
 
-      results.add(result);
+      // results.add(result);
+      resultMap.put(show.id, result);
     }
+
+    // and convert all entries from the map to a list
+    results.addAll(resultMap.values());
 
     // sort
     Collections.sort(results);
@@ -273,6 +312,27 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
 
     if (show == null) {
       return md;
+    }
+
+    // if there is no localized content and we have a fallback language, rescrape in the fallback language
+    String fallbackLanguage = MediaLanguages.get(providerInfo.getConfig().getValue("fallbackLanguage")).getLanguage();
+    if (StringUtils.isAnyBlank(show.seriesName, show.overview) && !fallbackLanguage.equals(options.getLanguage().getLanguage())) {
+      synchronized (tvdb) {
+        try {
+          TheTvDbConnectionCounter.trackConnections();
+          SeriesResponse response = tvdb.series().series(id, fallbackLanguage).execute().body();
+          Series fallBackShow = response.data;
+          if (StringUtils.isBlank(show.seriesName) && StringUtils.isNotBlank(fallBackShow.seriesName)) {
+            show.seriesName = fallBackShow.seriesName;
+          }
+          if (StringUtils.isBlank(show.overview) && StringUtils.isNotBlank(fallBackShow.overview)) {
+            show.overview = fallBackShow.overview;
+          }
+        }
+        catch (Exception e) {
+          LOGGER.error("failed to get meta data: " + e.getMessage());
+        }
+      }
     }
 
     // populate metadata
@@ -455,6 +515,50 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
 
     if (episode == null) {
       return md;
+    }
+
+    // if there is no localized content and we have a fallback language, rescrape in the fallback language
+    String fallbackLanguage = MediaLanguages.get(providerInfo.getConfig().getValue("fallbackLanguage")).getLanguage();
+    if (StringUtils.isAnyBlank(episode.episodeName, episode.overview) && !fallbackLanguage.equals(options.getLanguage().getLanguage())) {
+      synchronized (tvdb) {
+        try {
+          // TheTvDbConnectionCounter.trackConnections();
+          EpisodesResponse response = null;
+
+          // get by season/ep number
+          if (useDvdOrder) {
+            TheTvDbConnectionCounter.trackConnections();
+            response = tvdb.series().episodesQuery(id, null, null, null, seasonNr, (double) episodeNr, null, null, 1, fallbackLanguage).execute()
+                .body();
+          }
+          else {
+            TheTvDbConnectionCounter.trackConnections();
+            response = tvdb.series().episodesQuery(id, null, seasonNr, episodeNr, null, null, null, null, 1, fallbackLanguage).execute().body();
+          }
+
+          // not found? try to match by date
+          if (response == null && !aired.isEmpty()) {
+            TheTvDbConnectionCounter.trackConnections();
+            response = tvdb.series().episodesQuery(id, null, null, null, null, null, null, aired, 1, fallbackLanguage).execute().body();
+          }
+
+          if (response != null && !response.data.isEmpty()) {
+            TheTvDbConnectionCounter.trackConnections();
+            EpisodeResponse response1 = tvdb.episodes().get(response.data.get(0).id, fallbackLanguage).execute().body();
+            if (StringUtils.isBlank(episode.episodeName) && StringUtils.isNotBlank(response1.data.episodeName)) {
+              episode.episodeName = response1.data.episodeName;
+            }
+            if (StringUtils.isBlank(episode.overview) && StringUtils.isNotBlank(response1.data.overview)) {
+              episode.overview = response1.data.overview;
+            }
+            episode = response1.data;
+          }
+
+        }
+        catch (Exception e) {
+          LOGGER.error("failed to get meta data: " + e.getMessage());
+        }
+      }
     }
 
     md.setEpisodeNumber(TvUtils.getEpisodeNumber(episode.airedEpisodeNumber));
@@ -731,23 +835,41 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
     }
 
     List<Episode> eps = new ArrayList<>();
+    List<Episode> fallbackEps = new ArrayList<>();
     synchronized (tvdb) {
       try {
+        String fallbackLanguage = MediaLanguages.get(providerInfo.getConfig().getValue("fallbackLanguage")).getLanguage();
+
         // 100 results per page
         int counter = 1;
         while (true) {
           TheTvDbConnectionCounter.trackConnections();
-          EpisodesResponse response = tvdb.series().episodes(id, counter++, options.getLanguage().getLanguage()).execute().body();
+          EpisodesResponse response = tvdb.series().episodes(id, counter, options.getLanguage().getLanguage()).execute().body();
+
+          // and get the episode listing in the fallback language too
+          if (!fallbackLanguage.equals(options.getLanguage().getLanguage())) {
+            TheTvDbConnectionCounter.trackConnections();
+            EpisodesResponse responseFallback = tvdb.series().episodes(id, counter, fallbackLanguage).execute().body();
+            fallbackEps.addAll(responseFallback.data);
+          }
 
           eps.addAll(response.data);
           if (response.data.size() < 100) {
             break;
           }
+
+          counter++;
         }
       }
       catch (Exception e) {
         LOGGER.error("failed to get episode list: " + e.getMessage());
       }
+    }
+
+    // build the fallback language episode map for faster lookup
+    Map<String, Episode> fallbackEpsMap = new HashMap<>();
+    for (Episode ep : fallbackEps) {
+      fallbackEpsMap.put("S" + ep.airedSeason + "E" + ep.airedEpisodeNumber, ep);
     }
 
     for (Episode ep : eps) {
@@ -757,9 +879,22 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
       episode.season = TvUtils.getSeasonNumber(ep.airedSeason);
       episode.dvdEpisode = TvUtils.getEpisodeNumber(ep.dvdEpisodeNumber);
       episode.dvdSeason = TvUtils.getSeasonNumber(ep.dvdSeason);
-      episode.title = ep.episodeName;
-      episode.plot = ep.overview;
       episode.firstAired = ep.firstAired;
+
+      Episode fallbackEpisode = fallbackEpsMap.get("S" + ep.airedSeason + "E" + ep.airedEpisodeNumber);
+      if (StringUtils.isNotBlank(ep.episodeName)) {
+        episode.title = ep.episodeName;
+      }
+      else if (fallbackEpisode != null && StringUtils.isNotBlank(fallbackEpisode.episodeName)) {
+        episode.title = fallbackEpisode.episodeName;
+      }
+
+      if (StringUtils.isNotBlank(ep.overview)) {
+        episode.plot = ep.overview;
+      }
+      else if (fallbackEpisode != null && StringUtils.isNotBlank(fallbackEpisode.overview)) {
+        episode.plot = fallbackEpisode.overview;
+      }
 
       episodes.add(episode);
     }
