@@ -93,8 +93,7 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
   private static MediaProviderInfo providerInfo = createMediaProviderInfo();
   private static String            artworkUrl   = "http://thetvdb.com/banners/";
 
-  public TheTvDbMetadataProvider() throws Exception {
-    initAPI();
+  public TheTvDbMetadataProvider() {
   }
 
   private static MediaProviderInfo createMediaProviderInfo() {
@@ -149,6 +148,9 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
 
   @Override
   public MediaMetadata getMetadata(MediaScrapeOptions mediaScrapeOptions) throws Exception {
+    // lazy initialization of the api
+    initAPI();
+
     LOGGER.debug("getting metadata: " + mediaScrapeOptions);
     switch (mediaScrapeOptions.getType()) {
       case TV_SHOW:
@@ -164,6 +166,9 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
 
   @Override
   public List<MediaSearchResult> search(MediaSearchOptions options) throws Exception {
+    // lazy initialization of the api
+    initAPI();
+
     LOGGER.debug("search() " + options.toString());
     List<MediaSearchResult> results = new ArrayList<>();
 
@@ -616,6 +621,9 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
 
   @Override
   public List<MediaArtwork> getArtwork(MediaScrapeOptions options) throws Exception {
+    // lazy initialization of the api
+    initAPI();
+
     LOGGER.debug("getting artwork: " + options);
     List<MediaArtwork> artwork = new ArrayList<>();
     Integer id = 0;
@@ -799,6 +807,9 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
 
   @Override
   public List<MediaEpisode> getEpisodeList(MediaScrapeOptions options) throws Exception {
+    // lazy initialization of the api
+    initAPI();
+
     LOGGER.debug("getting episode list: " + options);
     List<MediaEpisode> episodes = new ArrayList<>();
     Integer id = 0;
