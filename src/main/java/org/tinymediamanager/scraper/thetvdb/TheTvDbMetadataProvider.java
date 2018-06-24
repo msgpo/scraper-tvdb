@@ -701,7 +701,7 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
     }
 
     // sort it
-    // Collections.sort(images, new ImageComparator(options.getLanguage().getLanguage()));
+    Collections.sort(images, new ImageComparator(options.getLanguage().getLanguage()));
 
     // build output
     for (SeriesImageQueryResult image : images) {
