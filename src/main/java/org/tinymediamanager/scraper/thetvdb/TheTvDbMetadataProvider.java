@@ -32,6 +32,8 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -668,7 +670,7 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
     }
 
     // get artwork from thetvdb
-    List<SeriesImageQueryResult> images = new ArrayList<>();
+    Set<SeriesImageQueryResult> images = new TreeSet<>(new ImageComparator(options.getLanguage().getLanguage()));
     synchronized (tvdb) {
       try {
         TheTvDbConnectionCounter.trackConnections();
@@ -685,9 +687,19 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
               || ("season".equals(param.keyType) && options.getArtworkType() == SEASON)
               // || ("seasonwide".equals(param.keyType) && options.getArtworkType() == SEASON) // not used atm
               || ("series".equals(param.keyType) && options.getArtworkType() == BANNER)) {
+            // artwork with the chosen language
             TheTvDbConnectionCounter.trackConnections();
-            SeriesImageQueryResultResponse response1 = tvdb.series().imagesQuery(id, param.keyType, null, null, null).execute().body();
-            images.addAll(response1.data);
+            SeriesImageQueryResultResponse response1 = tvdb.series().imagesQuery(id, param.keyType, null, null, options.getLanguage().getLanguage())
+                .execute().body();
+            if (response1 != null) {
+              images.addAll(response1.data);
+            }
+            // artwork with _default_language
+            TheTvDbConnectionCounter.trackConnections();
+            response1 = tvdb.series().imagesQuery(id, param.keyType, null, null, null).execute().body();
+            if (response1 != null) {
+              images.addAll(response1.data);
+            }
           }
         }
       }
@@ -701,7 +713,7 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
     }
 
     // sort it
-    Collections.sort(images, new ImageComparator(options.getLanguage().getLanguage()));
+    // Collections.sort(images, new ImageComparator(options.getLanguage().getLanguage()));
 
     // build output
     for (SeriesImageQueryResult image : images) {
@@ -1046,6 +1058,11 @@ public class TheTvDbMetadataProvider implements ITvShowMetadataProvider, ITvShow
      */
     @Override
     public int compare(SeriesImageQueryResult arg0, SeriesImageQueryResult arg1) {
+      // check the id
+      if (arg0.id == arg1.id) {
+        return 0;
+      }
+
       // check if first image is preferred langu
 
       // FIXME deactivated until tvdb add this in their API responses
